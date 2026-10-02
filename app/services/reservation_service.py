@@ -16,6 +16,11 @@ from app.models.models import (
     Show,
 )
 
+from app.core.metrics import (
+    reservations_confirmed,
+    reservations_declined,
+)
+
 
 def _request_hash(seats: list[str]) -> str:
     normalized = json.dumps(
@@ -79,6 +84,8 @@ def reserve_seats(
                 detail="Idempotency record is inconsistent",
             )
 
+        reservations_declined.labels(reason="idempotent-replay").inc()
+
         return existing_reservation
 
     # Load the show.
@@ -103,6 +110,7 @@ def reserve_seats(
     )
 
     if len(seats_requested) > show.per_user_limit:
+        reservations_declined.labels(reason="per-user-limit").inc()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Per-user seat limit exceeded",
@@ -122,6 +130,7 @@ def reserve_seats(
     ).scalars().all()
 
     if len(seats) != len(seats_requested):
+        reservations_declined.labels(reason="seat-do-not-exist").inc()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="One or more requested seats do not exist",
@@ -134,6 +143,7 @@ def reserve_seats(
     ]
 
     if unavailable:
+        reservations_declined.labels(reason="seat-taken").inc()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Seat(s) already taken: {', '.join(unavailable)}",
@@ -154,6 +164,7 @@ def reserve_seats(
     ).scalar_one()
 
     if current_seat_count + len(seats) > show.per_user_limit:
+        reservations_declined.labels(reason="per-user-limit").inc()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Per-user seat limit exceeded",
@@ -194,6 +205,7 @@ def reserve_seats(
     )
 
     db.commit()
+    reservations_confirmed.inc()
     db.refresh(reservation)
 
     return reservation
