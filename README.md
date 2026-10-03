@@ -1,179 +1,409 @@
-Seat Reservation Service
+# Seat Reservation Service
 
-A production-style seat reservation API built with FastAPI and PostgreSQL, designed to remain correct under concurrent reservation requests.
+A concurrency-safe seat reservation API built with **FastAPI + PostgreSQL**, designed to handle hot-seat races, idempotent retries, per-user booking limits, and concurrent multi-seat reservations.
 
-Live API
+## 🚀 Live Deployment
 
-https://paytm-seat-reservation-production.up.railway.app
+**API:** https://paytm-seat-reservation-production.up.railway.app
 
-Health checks:
+| Endpoint        | Purpose                  |
+| --------------- | ------------------------ |
+| `/health/live`  | Liveness check           |
+| `/health/ready` | Database readiness check |
+| `/metrics`      | Prometheus metrics       |
+| `/docs`         | Interactive Swagger API  |
 
-GET /health/live
-GET /health/ready
-GET /metrics
+---
 
-Interactive API documentation:
+## ✨ What This Project Demonstrates
 
-/docs
-Features
-Create shows with assigned seats and integer prices in paise
-Authenticated seat reservations using Bearer tokens
-Atomic seat reservation under concurrent requests
-Per-user booking limit
-Idempotency for safe request retries
-Explicit reservation cancellation
-Seat availability reconciliation
-Prometheus-style metrics
-Structured request logging with correlation IDs
-PostgreSQL-backed persistence
-Dockerized deployment
-Alembic database migrations
-Public deployment on Railway
-API
-Create a show
+* 🔒 **Atomic seat reservation**
+* ⚡ **Concurrency-safe booking**
+* 🎟️ **No double-selling**
+* 🔁 **Idempotent retries**
+* 👤 **Per-user booking limits**
+* 🔓 **Reservation cancellation**
+* 📊 **Prometheus metrics**
+* 📝 **Structured JSON request logs**
+* 🐘 **PostgreSQL persistence**
+* 🐳 **Dockerized deployment**
+* 🛠️ **Alembic migrations**
+* ☁️ **Live Railway deployment**
+
+---
+
+## 🏗️ Architecture
+
+```text
+                    Client
+                      │
+                      ▼
+              ┌───────────────┐
+              │   FastAPI     │
+              │     API       │
+              └───────┬───────┘
+                      │
+          ┌───────────┼───────────┐
+          │           │           │
+          ▼           ▼           ▼
+       Auth       Reservation   Metrics
+                     Service
+                      │
+                      ▼
+              ┌───────────────┐
+              │  PostgreSQL   │
+              │               │
+              │ Row Locks     │
+              │ Advisory Locks│
+              │ Constraints   │
+              └───────────────┘
+```
+
+---
+
+## 🔐 Concurrency Design
+
+The reservation decision happens inside **one PostgreSQL transaction**.
+
+### Seat race
+
+Requested seats are locked using:
+
+```sql
+SELECT ...
+FROM seats
+WHERE ...
+FOR UPDATE;
+```
+
+Only one transaction can successfully confirm a particular seat.
+
+If 20 users attempt the same seat concurrently:
+
+```text
+1 × 201 Created
+19 × 409 Conflict
+0 × 500
+```
+
+### Multi-seat requests
+
+Seats are always locked in sorted order.
+
+```text
+A1 → A2 → A3
+```
+
+This deterministic ordering reduces deadlock risk when multiple requests contain overlapping seats.
+
+### Per-user limit
+
+The default limit is **4 seats per show**.
+
+A PostgreSQL advisory lock keyed by:
+
+```text
+user + show
+```
+
+serializes concurrent limit checks so parallel requests cannot bypass the booking limit.
+
+---
+
+## 🔁 Idempotency
+
+Every reservation requires an `Idempotency-Key`.
+
+The service stores:
+
+```text
+user_id
+show_id
+idempotency_key
+request_hash
+reservation_id
+```
+
+### Same key + same request
+
+Returns the original reservation.
+
+```text
+First request  → 201
+Retry          → 201
+Same booking   → Yes
+```
+
+### Same key + different request
+
+Returns:
+
+```text
+409 Conflict
+```
+
+This prevents accidental duplicate operations when clients retry requests.
+
+---
+
+## 🎟️ Reservation Lifecycle
+
+```text
+AVAILABLE
+    │
+    │ reserve
+    ▼
+CONFIRMED
+    │
+    │ cancel
+    ▼
+AVAILABLE
+```
+
+This implementation uses **explicit cancellation** rather than timed holds.
+
+Therefore the current API reports:
+
+```text
+held = 0
+```
+
+The reservation history remains stored even after cancellation, while the seat itself becomes available for a future reservation.
+
+---
+
+## 💰 Money Handling
+
+All prices and reservation amounts use **integer paise**.
+
+Example:
+
+```json
+{
+  "price_paise": 25000
+}
+```
+
+No floating-point values are used for money.
+
+---
+
+## 🔑 Authentication
+
+For this assignment, authentication uses a lightweight Bearer-token mechanism.
+
+Example:
+
+```http
+Authorization: Bearer user-1
+```
+
+The user identity comes from the token.
+
+A client cannot provide another user's identity through the reservation request body.
+
+---
+
+## 📡 API
+
+### Create Show
+
+```http
 POST /shows
+```
+
+Requires:
+
+```http
 Authorization: Bearer admin
-Content-Type: application/json
+```
+
+Request:
+
+```json
 {
   "name": "friday-night",
   "seats": ["A1", "A2", "A3", "A4"],
   "price_paise": 25000
 }
+```
 
-The endpoint returns the show ID and assigned seats.
+---
 
-Reserve seats
+### Reserve Seats
+
+```http
 POST /shows/{show_id}/reserve
+```
+
+Requires:
+
+```http
 Authorization: Bearer user-1
 Idempotency-Key: reservation-001
-Content-Type: application/json
+```
+
+Request:
+
+```json
 {
   "seats": ["A1", "A2"]
 }
+```
 
-The authenticated user identity is taken from the Bearer token and cannot be supplied through the request body.
+---
 
-The default per-user limit is 4 seats per show.
+### Cancel Reservation
 
-Cancel a reservation
+```http
 POST /reservations/{reservation_id}/cancel
-Authorization: Bearer user-1
+```
 
-Only the reservation owner can cancel the reservation. Cancelled seats become available again.
+Requires the reservation owner's authentication token.
 
-Show status
+---
+
+### Show Status
+
+```http
 GET /shows/{show_id}
+```
 
-Returns individual seat states and aggregate counts for:
+Returns:
 
-available
-held
-confirmed
+* individual seat status
+* available count
+* held count
+* confirmed count
+* total seats
 
-This implementation uses explicit cancellation rather than timed holds, so held is currently 0.
+The reconciliation invariant is:
 
-Concurrency and correctness
+```text
+available + held + confirmed = total
+```
 
-Reservations are performed inside a single PostgreSQL transaction.
+---
 
-Requested seats are sorted before locking and selected using FOR UPDATE. This serializes concurrent attempts for the same seat and prevents double-selling.
+## 🧪 Testing
 
-For example, if 20 concurrent requests attempt to reserve the same seat:
+### Unit / API Tests
 
-exactly one request can confirm the seat
-the remaining requests receive 409 Conflict
-no request should return 500 because of the normal seat race
+```bash
+python -m pytest -q
+```
 
-Multi-seat reservations lock requested seats in deterministic sorted order to reduce deadlock risk.
+Current suite covers:
 
-The per-user limit is protected with a PostgreSQL transaction advisory lock keyed by user and show, so concurrent requests cannot bypass the limit through a race.
+* show creation
+* seat reservation
+* idempotency replay
+* same-key/different-request rejection
+* taken-seat conflicts
+* per-user limits
+* cancellation
+* cancellation ownership
+* concurrent hot-seat reservation
 
+### Concurrency Burst Test
+
+Run locally:
+
+```bash
+python scripts/burst_test.py
+```
+
+Run against production:
+
+```bash
+BASE_URL="https://paytm-seat-reservation-production.up.railway.app" \
+python scripts/burst_test.py
+```
+
+The burst test verifies:
+
+```text
+Hot-seat concurrency
 Idempotency
+Same-key/different-request handling
+Per-user concurrency limits
+Seat reconciliation
+```
 
-Each reservation request requires an Idempotency-Key.
+Latest deployed run:
 
-The service stores:
+```text
+Hot-seat storm: 1 created, 19 conflicts
+Idempotency replay: first=201, replay=201, same_reservation=True
+Same key / different request: 409
+Per-user limit: 4 created, 6 conflicts
+Reconciliation: total=5, available=3, held=0, confirmed=2
 
-user identity
-show
-idempotency key
-normalized request hash
-resulting reservation ID
+ALL BURST CHECKS PASSED
+```
 
-The idempotency key is unique per user and show.
+---
 
-Retrying the same key with the same request returns the original reservation.
+## 📊 Observability
 
-Reusing the same key with a different seat request returns 409 Conflict.
+### Health
 
-A PostgreSQL transaction advisory lock serializes concurrent requests using the same idempotency key.
+```bash
+GET /health/live
+GET /health/ready
+```
 
-Partial requests
+Readiness checks PostgreSQL and returns `503` if the database is unavailable.
 
-Multi-seat reservations are all-or-nothing.
+### Metrics
 
-If any requested seat does not exist or is already unavailable, the complete reservation is rejected with 409 Conflict. No subset of the requested seats is confirmed.
+```bash
+GET /metrics
+```
 
-Money
+Exposes:
 
-All monetary values are represented as integer paise.
-
-No floating-point values are used for reservation prices or amounts.
-
-Authentication
-
-The assignment uses a simple Bearer-token authentication mechanism for the exercise.
-
-Example:
-
-Authorization: Bearer user-1
-
-The token value is used as the authenticated user identity.
-
-This is intentionally lightweight and is not intended to replace a production OAuth/JWT identity provider.
-
-Observability
-Metrics
-
-GET /metrics exposes Prometheus-style metrics including:
-
+```text
 reservations_confirmed_total
 reservations_declined_total{reason="seat-taken"}
 reservations_declined_total{reason="per-user-limit"}
 reservations_declined_total{reason="idempotent-replay"}
 seats_available{show_id="..."}
+```
 
-The available-seat gauge is reconciled from PostgreSQL state when /metrics is requested.
+### Structured Logs
 
-Request logging
+Every request produces JSON containing:
 
-Each HTTP request produces structured JSON containing:
-
-request ID
-HTTP method
+```text
+request_id
+method
 path
-response status
-request duration
+status
+duration_ms
+```
 
-Clients can provide an X-Request-ID header. If omitted, the service generates one.
+Clients can provide:
 
-Health checks
-Liveness
-GET /health/live
+```http
+X-Request-ID
+```
 
-Confirms that the application process is running.
+If not provided, the service generates one.
 
-Readiness
-GET /health/ready
+---
 
-Performs a database connectivity check and returns HTTP 503 when the database is unavailable.
+## 🐳 Run Locally
 
-Running locally
-Requirements
-Python 3.13+
-Docker Desktop
-PostgreSQL, or the provided Docker Compose setup
-Setup
+### Requirements
+
+* Python 3.13+
+* Docker Desktop
+* Git
+
+### Setup
+
+```bash
 git clone git@github.com:Parvinderkaur-Sodhi/paytm-seat-reservation.git
 cd paytm-seat-reservation
 
@@ -181,95 +411,163 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
-Start PostgreSQL
+```
+
+### Start PostgreSQL
+
+```bash
 docker compose up -d postgres
-Run migrations
+```
+
+### Run migrations
+
+```bash
 alembic upgrade head
-Start the API
+```
+
+### Start API
+
+```bash
 uvicorn app.main:app --reload
+```
 
-The API is then available at:
+API:
 
+```text
 http://localhost:8000
-Run with Docker Compose
+```
+
+Swagger:
+
+```text
+http://localhost:8000/docs
+```
+
+---
+
+## 🐳 Run Everything with Docker
+
+```bash
 docker compose up --build
+```
 
-The container startup script automatically runs:
+Container startup automatically runs:
 
+```bash
 alembic upgrade head
+```
 
 before starting Uvicorn.
 
-Tests
+---
 
-Run the automated test suite:
+## 📁 Project Structure
 
-python -m pytest -q
+```text
+paytm-seat-reservation/
+│
+├── app/
+│   ├── api/
+│   │   ├── health.py
+│   │   ├── reservations.py
+│   │   └── shows.py
+│   │
+│   ├── core/
+│   │   ├── auth.py
+│   │   └── metrics.py
+│   │
+│   ├── db/
+│   │   └── database.py
+│   │
+│   ├── models/
+│   │   └── models.py
+│   │
+│   ├── schemas/
+│   │   ├── reservation.py
+│   │   └── show.py
+│   │
+│   ├── services/
+│   │   └── reservation_service.py
+│   │
+│   └── main.py
+│
+├── alembic/
+│   └── versions/
+│
+├── scripts/
+│   └── burst_test.py
+│
+├── tests/
+│   └── test_reservations.py
+│
+├── Dockerfile
+├── docker-compose.yml
+├── start.sh
+├── requirements.txt
+├── README.md
+└── WRITEUP.md
+```
 
-The test suite covers show creation, reservations, idempotency, conflicts, per-user limits, cancellation, ownership checks, and concurrent hot-seat reservation.
+---
 
-Concurrency burst test
+## 📖 Engineering Write-up
 
-Run the burst test locally:
+For the detailed design decisions and trade-offs, see:
 
-python scripts/burst_test.py
+**[WRITEUP.md](WRITEUP.md)**
 
-Run it against the deployed service:
+It covers:
 
-BASE_URL="https://paytm-seat-reservation-production.up.railway.app" python scripts/burst_test.py
+* atomic reservation mechanism
+* PostgreSQL locking strategy
+* deadlock avoidance
+* idempotency design
+* per-user concurrency control
+* cancellation
+* consistency vs availability
+* health checks
+* observability
+* testing
+* AI usage
+* future improvements
 
-The burst test verifies:
+---
 
-hot-seat concurrency
-exactly one successful reservation for the same seat
-clean 409 conflicts
-idempotent replay
-same-key/different-request rejection
-per-user booking limit under concurrency
-final seat-count reconciliation
-Database migrations
+## 🤖 AI Usage
 
-Alembic migrations are stored under:
+AI was used during development for:
 
-alembic/versions/
+* architecture discussions
+* concurrency and race-condition review
+* test-case generation
+* debugging
+* deployment troubleshooting
+* documentation
 
-For deployment, migrations run automatically from start.sh.
+The resulting implementation was manually reviewed and validated through automated tests and a live concurrency burst test.
 
-Project structure
-app/
-  api/
-    health.py
-    reservations.py
-    shows.py
-  core/
-    auth.py
-    metrics.py
-  db/
-    database.py
-  models/
-    models.py
-  schemas/
-    reservation.py
-    show.py
-  services/
-    reservation_service.py
-  main.py
+---
 
-tests/
-  test_reservations.py
+## 📌 Assignment Result
 
-scripts/
-  burst_test.py
+The service has been tested both locally and against the deployed Railway instance.
 
-alembic/
-  versions/
+```text
+Local tests                 PASS
+Docker build                PASS
+Database migrations         PASS
+Liveness                    PASS
+Readiness                    PASS
+Prometheus metrics          PASS
+Hot-seat concurrency        PASS
+Idempotency                 PASS
+Per-user concurrency limit  PASS
+Seat reconciliation         PASS
+Live burst test             PASS
+```
 
-Dockerfile
-docker-compose.yml
-start.sh
-requirements.txt
-README.md
-WRITEUP.md
-Design details
+**Live API:**
+https://paytm-seat-reservation-production.up.railway.app
 
-The detailed engineering decisions, concurrency mechanism, consistency trade-offs, observability approach, AI usage, and future improvements are documented in WRITEUP.md.
+**API Docs:**
+https://paytm-seat-reservation-production.up.railway.app/docs
