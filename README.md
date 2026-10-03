@@ -4,7 +4,17 @@ A concurrency-safe seat reservation API built with **FastAPI + PostgreSQL**, des
 
 ## 🚀 Live Deployment
 
-**API:** https://paytm-seat-reservation-production.up.railway.app
+**Base URL (API):**  
+https://paytm-seat-reservation-production.up.railway.app
+
+**Interactive API Docs:**  
+https://paytm-seat-reservation-production.up.railway.app/docs
+
+**Health Check:**  
+https://paytm-seat-reservation-production.up.railway.app/health/live
+
+**Metrics:**  
+https://paytm-seat-reservation-production.up.railway.app/metrics
 
 | Endpoint        | Purpose                  |
 | --------------- | ------------------------ |
