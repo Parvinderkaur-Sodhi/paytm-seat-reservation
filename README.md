@@ -317,40 +317,121 @@ Current suite covers:
 
 ### Concurrency Burst Test
 
-Run locally:
+## 📥 Run Locally
+
+Follow these steps if you are running the project for the first time.
+
+### 1. Clone the repository
+
+Copy and run:
 
 ```bash
-python scripts/burst_test.py
+git clone https://github.com/Parvinderkaur-Sodhi/paytm-seat-reservation.git
+cd paytm-seat-reservation
 ```
 
-Run against production:
+### 2. Create and activate a virtual environment
 
 ```bash
-BASE_URL="https://paytm-seat-reservation-production.up.railway.app" \
+python3.13 -m venv .venv
+source .venv/bin/activate
+```
+
+You should now see `(.venv)` at the beginning of your terminal prompt.
+
+### 3. Install the required Python packages
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Start PostgreSQL and the API with Docker
+
+Make sure Docker Desktop is installed and running, then run:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+* PostgreSQL database
+* FastAPI application
+* Database migrations
+
+The API will be available at:
+
+```text
+http://localhost:8000
+```
+
+### 5. Check that the API is running
+
+Open another terminal and run:
+
+```bash
+curl http://localhost:8000/health/live
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+You can also open the interactive API documentation:
+
+```text
+http://localhost:8000/docs
+```
+
+### 6. Run the automated tests
+
+With the virtual environment activated:
+
+```bash
+python -m pytest -q
+```
+
+### 7. Run the concurrency / burst test
+
+Make sure the API is running first, then in another terminal:
+
+```bash
 python scripts/burst_test.py
 ```
 
 The burst test verifies:
 
+* 500 concurrent attempts for the same seat
+* exactly 1 successful reservation
+* 499 clean conflicts
+* idempotency replay
+* same-key/different-request protection
+* per-user booking limit under concurrency
+* final seat-count reconciliation
+
+A successful run ends with:
+
 ```text
-Hot-seat concurrency
-Idempotency
-Same-key/different-request handling
-Per-user concurrency limits
-Seat reconciliation
-```
-
-Latest deployed run:
-
-```text
-Hot-seat storm: 1 created, 19 conflicts
-Idempotency replay: first=201, replay=201, same_reservation=True
-Same key / different request: 409
-Per-user limit: 4 created, 6 conflicts
-Reconciliation: total=5, available=3, held=0, confirmed=2
-
 ALL BURST CHECKS PASSED
 ```
+
+### 8. Stop the application
+
+Press `Ctrl + C` in the terminal running Docker Compose, then run:
+
+```bash
+docker compose down
+```
+
+To also remove the local PostgreSQL data:
+
+```bash
+docker compose down -v
+```
+
+> **Note:** `docker compose down -v` deletes the local database volume. Use it only when you want to reset the local database completely.
 
 ---
 

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -108,7 +108,7 @@ def cancel_reservation(
         )
 
     reservation.status = ReservationStatus.CANCELLED
-    reservation.cancelled_at = datetime.utcnow()
+    reservation.cancelled_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     seats = db.execute(
         select(Seat)

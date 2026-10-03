@@ -65,7 +65,7 @@ def main():
     show_id = show["id"]
     print(f"Created show: {show_id}")
 
-    # 2. Hot-seat storm: 20 users try the exact same seat.
+    '''# 2. Hot-seat storm: 20 users try the exact same seat.
     barrier = threading.Barrier(20)
 
     def hot_seat_request(i):
@@ -92,6 +92,38 @@ def main():
 
     assert created == 1
     assert conflicts == 19
+    assert not unexpected'''
+
+    # 2. Hot-seat storm: 500 users try the exact same seat.
+    hot_seat_requests = 500
+    hot_seat_workers = 100
+
+    barrier = threading.Barrier(hot_seat_requests)
+
+    def hot_seat_request(i):
+        #barrier.wait()
+        return request(
+            "POST",
+            f"/shows/{show_id}/reserve",
+            {"seats": ["A1"]},
+            token=f"hot-user-{i}",
+            headers={"Idempotency-Key": f"hot-{i}"},
+        )[0]
+
+    with ThreadPoolExecutor(max_workers=hot_seat_workers) as pool:
+        results = list(pool.map(hot_seat_request, range(hot_seat_requests)))
+
+    created = results.count(201)
+    conflicts = results.count(409)
+    unexpected = [status for status in results if status not in (201, 409)]
+
+    print(
+        f"Hot-seat storm: {created} created, "
+        f"{conflicts} conflicts, unexpected={unexpected}"
+    )
+
+    assert created == 1
+    assert conflicts == hot_seat_requests - 1
     assert not unexpected
 
     # 3. Idempotency replay.
