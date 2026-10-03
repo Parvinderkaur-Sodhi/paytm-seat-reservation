@@ -151,8 +151,7 @@ class ReservationSeat(Base):
     seat_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("seats.id"),
-        primary_key=True,
-        unique=True,
+        primary_key=True
     )
 
     reservation: Mapped["Reservation"] = relationship(
